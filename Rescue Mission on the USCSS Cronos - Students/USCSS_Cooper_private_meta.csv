@@ -1,0 +1,5 @@
+sample_id,status,timepoint,batch
+OUTLIER_C_T0,cooper_host,0,BatchA
+OUTLIER_C_T1,cooper_host,1,BatchB
+OUTLIER_C_T2,cooper_host,2,BatchB
+OUTLIER_C_T3,cooper_host,3,BatchC

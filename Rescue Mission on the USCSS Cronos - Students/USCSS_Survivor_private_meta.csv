@@ -1,0 +1,5 @@
+sample_id,status,timepoint,batch
+CALL_T0,protected_candidate,0,BatchB
+CALL_T1,protected_candidate,1,BatchA
+CALL_T2,protected_candidate,2,BatchC
+CALL_T3,protected_candidate,3,BatchB
