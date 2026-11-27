@@ -1,0 +1,363 @@
+---
+title: "Cronus mission: cells from the crew"
+subtitle: "Day 2 · Single-cell biopsies at T3 · Student exercises"
+author: "Johannes Wolter · Bioinformatics module"
+date: "Course revision · November 2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: true
+    theme: default
+    highlight: tango
+    mathjax: null
+    css: course.css
+    self_contained: true
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE, echo = TRUE)
+```
+
+# Biopsies from Lab 2
+
+<!-- Story text: edit freely. -->
+<div class="transmission">
+<div class="channel">AVA // LAB 2 // COLD STORAGE INVENTORY</div>
+<p>Lab 2 cold storage holds tissue biopsies from seven crew members, all taken
+at T3. Dr. Cooper prepared them for single-cell sequencing. The counts are on
+the ship's drive; his analysis stops after the first quality checks.</p>
+<p>The bulk data told you which crew members differ. These cells can show
+where in the tissue the difference lives.</p>
+</div>
+
+## What this block is about
+
+Bulk RNA-seq measures the average of all cells in a sample. A difference
+between two bulk samples can have two causes: the sample contains **different
+cells** (its composition changed), or the same cells are in a **different
+state** (their expression changed). Single-cell data can separate the two.
+
+In tumour research, single-cell data are often used to study the
+**microenvironment**: the immune cells, blood vessels, and connective tissue
+around the tumour cells. The same tumour cells can grow or be held in check,
+depending on the cells around them. Here you compare the microenvironment in
+the survivor's biopsy with those of the other crew members.
+
+::: {.teaching-box}
+**What single-cell data can and cannot say about a microenvironment**
+
+To sequence single cells, the tissue is broken up into a suspension. We learn
+which cell types are present, in which proportions, and in which states. We do
+not learn which cells touched each other; that needs spatial methods that keep
+the tissue intact.
+
+All cells in one biopsy come from one person. A thousand cells from the
+survivor are one person measured in detail, not a thousand independent people.
+What we find is a description of this person, not a proof that it protects
+anyone else.
+:::
+
+## Your route
+
+| Step | Main question | Time |
+|:--|:--|--:|
+| 1. Load and check quality | Which barcodes are not intact single cells? | 5 min |
+| 2. Prepare and map the cells | How do the cells group? | 5 min |
+| 3. Name the cell types | What evidence supports a label? | 8 min |
+| 4. Compare the microenvironments | Which cells, in which states, surround the survivor's tissue? | 10 min |
+| 5. Find the PROT program | In which cells is PROT switched on? | 5 min |
+| 6. Conclude | What do the cells show, and what can they not show? | 2 min |
+
+Most code is supplied: you practised these steps in the morning workshop, and
+here the work is reading the output. Open **cronus_mission.Rproj**, create a
+script, and copy each block into it. If a step fails or takes too long, load the
+checkpoint named in that step and continue.
+
+## The data
+
+These data are **simulated for this course**. Marker genes carry real human gene
+names, so you can use what you know about them. The HVAR genes are the
+mission's internal codes.
+
+| File in `data/single_cell` | Contents |
+|:--|:--|
+| `cronus_cell_counts.rds` | Raw counts: genes in rows, cell barcodes in columns |
+| `cronus_cell_metadata.csv` | One row per barcode: `cell_id` and `donor_id` |
+| `cronus_donors.csv` | One row per biopsy: `donor_id`, `bulk_sample_id`, `group` |
+| `cell_markers.csv` | Marker genes for cell types and cell states |
+| `hvar_modules.csv` | The 50 HVAR genes and their module (SPORE, MUTX, XENO, RIDLEY, PROT) |
+
+The `group` column uses the labels from the medical log: `control`,
+`infected_antidote`, `creature`, `outlier_c` (the sample Dr. Cooper called
+instrument error), and `hope` (the crew member he marked "HOPE?").
+`bulk_sample_id` links each biopsy to its T3 sample in the bulk archive.
+
+Seurat does not allow underscores in gene names and replaces them with dashes.
+The single-cell data therefore use `HVAR-041` where the bulk archive uses
+`HVAR_041`; `hvar_modules.csv` lists both.
+
+# Step 1 / Load the biopsies and check quality
+
+```{r load}
+source("start_single_cells.R")
+cells
+table(cells$donor_id, cells$group)
+```
+
+`start_single_cells.R` reads the counts, joins the donor table to every barcode
+by `donor_id`, and calculates `percent.mt`, the share of counts from
+mitochondrial genes.
+
+```{r qc-plots}
+VlnPlot(cells, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+        group.by = "donor_id", layer = "counts", pt.size = 0.1, ncol = 3)
+FeatureScatter(cells, feature1 = "nFeature_RNA", feature2 = "percent.mt",
+               group.by = "donor_id")
+```
+
+The supplied rule keeps barcodes with more than 300 detected genes and less
+than 15% mitochondrial counts. Count what it removes in each biopsy, then apply it.
+
+```{r qc-filter}
+keep <- cells$nFeature_RNA > 300 & cells$percent.mt < 15
+table(biopsy = cells$donor_id, kept = keep)
+cells <- subset(cells, cells = colnames(cells)[keep])
+ncol(cells)
+```
+
+::: {.teaching-box}
+**What a simple rule cannot catch**
+
+A damaged cell loses RNA from its cytoplasm, so few genes are detected and the
+mitochondrial share rises. Some damaged cells still pass the cut-offs.
+
+A **doublet** is a barcode that captured two cells. Its counts add up, so it
+shows *more* genes than usual, not fewer: this rule keeps it. Doublets can sit
+between clusters or look like a cell with two identities. Every droplet also
+captures some **ambient RNA** floating in the sample, so a marker can be
+detected at low levels in cells that do not express it.
+:::
+
+::: {.exercise-box}
+
+**Done when:** you know how many barcodes each biopsy loses (about 2–4%), and
+you can name one kind of problem that this rule cannot catch.
+
+:::
+
+# Step 2 / Prepare and map the cells
+
+This block runs the steps from the morning workshop: normalisation, variable
+genes, scaling, PCA, neighbour graph, clustering, and UMAP.
+
+```{r prepare-cells}
+cells <- NormalizeData(cells, verbose = FALSE)
+cells <- FindVariableFeatures(cells, nfeatures = 1500, verbose = FALSE)
+cells <- ScaleData(cells, verbose = FALSE)
+cells <- RunPCA(cells, npcs = 30, seed.use = 42, verbose = FALSE)
+cells <- FindNeighbors(cells, dims = 1:20, verbose = FALSE)
+cells <- FindClusters(cells, resolution = 0.4, random.seed = 42, verbose = FALSE)
+cells <- RunUMAP(cells, dims = 1:20, seed.use = 42, verbose = FALSE)
+```
+
+**Stuck?** `cells <- readRDS("checkpoints/cronus_cells_clustered.rds")` loads
+the result of Steps 1 and 2.
+
+```{r umap-overview}
+DimPlot(cells, label = TRUE) + DimPlot(cells, group.by = "group")
+```
+
+::: {.exercise-box}
+
+**Done when:** you have both UMAPs, and you can say whether most clusters
+contain cells from several crew members. Is there a cluster that does not?
+
+:::
+
+# Step 3 / Name the cell types
+
+Clusters are groups of similar cells; they do not come with names. Use the
+cell-type markers in `cell_markers.csv`: a cluster that expresses several
+markers of one cell type, and few of the others, gets that name.
+
+```{r dotplot-types}
+markers <- read_csv(file.path("data", "single_cell", "cell_markers.csv"),
+                    show_col_types = FALSE)
+type_markers <- markers %>% filter(kind == "cell type")
+DotPlot(cells, features = unique(type_markers$gene_id),
+        group.by = "seurat_clusters") + RotatedAxis()
+type_markers %>% group_by(marker_for) %>%
+  summarise(genes = paste(gene_id, collapse = ", "))
+```
+
+Read the dot plot: dot size is the share of cells in the cluster that express
+the gene; colour is the average expression. Then give every cluster a name.
+Two clusters can get the same name.
+
+```{r name-clusters}
+# One entry per cluster number in your dot plot, for example "0" = "Fibroblast"
+cluster_names <- c("0" = "...", "1" = "...")
+cells$cell_type <- unname(cluster_names[as.character(cells$seurat_clusters)])
+table(cells$cell_type, useNA = "ifany")
+DimPlot(cells, group.by = "cell_type", label = TRUE)
+```
+
+> **AI task:** Describe your dot plot to an assistant in words (which markers
+> are strong in which cluster) and ask whether your names are consistent with
+> those markers. Do not ask it to name clusters it cannot see.
+
+**Stuck?** `cells <- readRDS("checkpoints/cronus_cells_annotated.rds")` loads
+the cells with a `cell_type` column.
+
+::: {.exercise-box}
+
+**Done when:** every cluster has a name, `table(cells$cell_type, useNA = "ifany")`
+shows no `NA`, and your UMAP shows six cell types. Look at the two T-cell
+clusters (if you have two): which crew members do their cells come from?
+Is that a new cell type, or T cells in a different state?
+
+:::
+
+# Step 4 / Compare the microenvironments
+
+## Which cells are present?
+
+```{r composition}
+composition <- cells[[]] %>%
+  count(donor_id, group, cell_type) %>%
+  group_by(donor_id) %>%
+  mutate(share = n / sum(n)) %>%
+  ungroup()
+ggplot(composition, aes(paste(donor_id, group, sep = "\n"), share, fill = cell_type)) +
+  geom_col() +
+  labs(x = NULL, y = "Share of cells in the biopsy", fill = NULL)
+```
+
+Which biopsy has the largest share of T cells? Which has the largest share of
+epithelial cells? A biopsy is a small piece of tissue, so some variation between
+people is expected.
+
+## In which state are the cells?
+
+The state markers in `cell_markers.csv` describe what a cell is doing: resting,
+cytotoxic (killing other cells), or exhausted T cells; inflammatory or
+suppressive myeloid cells; activated fibroblasts; dividing cells. Start with
+the T cells and compare the groups:
+
+```{r t-states}
+state_markers <- markers %>% filter(kind == "cell state")
+t_cells <- subset(cells, subset = cell_type == "T cell")
+DotPlot(t_cells, group.by = "group",
+        features = state_markers %>%
+          filter(marker_for %in% c("T resting", "T cytotoxic", "T exhausted")) %>%
+          pull(gene_id)) + RotatedAxis()
+```
+
+Now repeat the plot for the **myeloid cells** (markers "Myeloid inflammatory"
+and "Myeloid suppressive") and the **fibroblasts** ("Fibroblast activated").
+You need to change the cell type and the marker names.
+
+::: {.exercise-box}
+
+**Done when:** you have one sentence each for T cells, myeloid cells, and
+fibroblasts: how do the survivor's (`hope`) cells differ from those of the
+antidote recipients and the creature? Expect overlap between groups; compare
+the dot sizes as well as the colours.
+
+:::
+
+# Step 5 / Find the PROT program
+
+Each HVAR module has ten genes. A simple module score is the average normalised
+expression of its genes in each cell.
+
+```{r module-scores}
+modules <- read_csv(file.path("data", "single_cell", "hvar_modules.csv"),
+                    show_col_types = FALSE)
+module_genes <- split(modules$gene_id, modules$module)
+for (m in names(module_genes)) {
+  score <- rowMeans(FetchData(cells, vars = module_genes[[m]], layer = "data"))
+  cells <- AddMetaData(cells, metadata = score, col.name = m)
+}
+FeaturePlot(cells, features = "PROT") + DimPlot(cells, group.by = "group")
+```
+
+Now compare the average PROT score per group, once over all cells (like a bulk
+sample) and once within each cell type:
+
+```{r prot-table}
+cells[[]] %>%
+  group_by(group) %>%
+  summarise(all_cells = mean(PROT),
+            T_cells = mean(PROT[cell_type == "T cell"]),
+            other_cells = mean(PROT[cell_type != "T cell"]))
+```
+
+::: {.exercise-box}
+
+**Done when:** your table has five rows, and you can say in which cells PROT is
+switched on, and why the difference between groups is smaller in the
+`all_cells` column.
+
+:::
+
+# Step 6 / Conclude
+
+Write three sentences in your script:
+
+1. How does the survivor's microenvironment differ from that of the antidote
+   recipients and the creature?
+2. In which cells is the PROT program active, and what does that suggest about
+   where the protection comes from?
+3. What can one biopsy from one person not show?
+
+<div class="checkpoint">
+<strong>Class stop · Send Ava:</strong> your three sentences and one figure
+that supports the first or second sentence.
+</div>
+
+## Extra tasks, if time remains
+
+- **Cooper (`outlier_c`).** Compare the XENO and RIDLEY scores across cell types
+  and groups, for example with `VlnPlot(cells, features = "XENO", group.by = "cell_type", split.by = "group")`
+  or a summary table as in Step 5. In which cells is his signal? What does that
+  suggest about how it spreads through his body?
+- **The creature.** Compare the proliferation markers (`MKI67`, `TOP2A`, `CCNB1`,
+  `CDK1`) and the MUTX score in the epithelial cells of each group. Are the
+  survivor's epithelial cells affected by the antidote too? Are they dividing?
+
+::: {.key-ideas}
+**Key ideas · Single cells and the microenvironment**
+
+- A bulk difference can come from different cells (composition) or from the same
+  cells in a different state. Single-cell data can separate the two.
+- A cluster is a group of similar cells. Its name comes from marker evidence,
+  ideally several markers that agree, not from its number.
+- A signal confined to one cell type looks much weaker when all cells are
+  averaged, as in a bulk sample.
+- Quality rules catch most damaged cells but not doublets; ambient RNA puts low
+  levels of markers into cells that do not express them.
+- Single-cell data show which cells are present and in which states, not which
+  cells touched each other.
+- Many cells from one person describe that person in detail; they are not
+  independent replicates.
+:::
+
+<!-- Story text: edit freely. -->
+<div class="transmission">
+<div class="channel">AVA // ANALYSIS LOGGED</div>
+<p>Your findings have been added to the ship's record. The ship's records are
+transmitted to Weyland-Yutani automatically.</p>
+</div>
+
+<details>
+<summary>Reproducibility — rendering environment</summary>
+
+```{r session-info}
+sessionInfo()
+```
+
+</details>

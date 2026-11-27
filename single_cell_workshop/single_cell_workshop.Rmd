@@ -1,0 +1,446 @@
+---
+title: "Single-cell workshop: from counts to cell types"
+subtitle: "GSE248995 brain data · Student version"
+author: "Adapted for this module from Mert Cihan's single-cell workshop"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: true
+    theme: default
+    highlight: tango
+    mathjax: null
+    css: course.css
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE, echo = TRUE)
+```
+
+<div class="transmission">
+<div class="channel">AVA // LAB 2 // SINGLE-CELL ARCHIVE</div>
+<p>Dr. Cooper prepared biopsies in Lab 2 for single-cell sequencing. Before
+you open them, practise on a real archive: human brain tissue from Earth.</p>
+</div>
+
+# What this workshop is about
+
+Bulk RNA-seq measures the average of all cells in a sample. Single-cell
+RNA-seq measures each cell separately, so we can ask which cell types are
+present, in which proportions, and in which states. The measurements are
+sparse and noisy: a zero can mean the gene was off, or that its molecules were
+not captured.
+
+Library preparation, alignment, and counting are done. You start from a Seurat
+object with a count matrix and sample information and turn it into cell types
+you can defend.
+
+By the end, you should be able to:
+
+- tell apart genes, cells, samples, and people;
+- explain what QC, normalisation, PCA, clustering, and UMAP each contribute;
+- name clusters from marker evidence, and leave a cluster unnamed when the
+  evidence is mixed;
+- check which samples a cluster comes from before calling it a cell type.
+
+The sequence follows **Mert Cihan's “Single-Cell RNA Sequencing Data Analysis
+with Seurat”**, just in a very swmall and quick workshop
+
+## Your route
+
+Open **student_workbook.R**. Exercise 1 loads the data with supplied code.
+From Exercise 2 on, each step has a task and an **AI prompt**: let a free
+chatbot write the code, read it, run it in your workbook, and answer the
+questions below it. The prompts name the settings to use, so that your
+clusters match the checkpoints and the solutions. If the code does not work or
+time runs short, open **Show the code** below the prompt and use the supplied
+version. If a step fails completely, load the checkpoint named in that step.
+
+An AI assistant can write and explain code, or discuss a plot you describe to
+it. Do not ask it to invent sample information or to name clusters it cannot see.
+It might also accidentaly fool you to believe something that isnt there, so watch out.
+
+## The data
+
+Real human subventricular-zone tissue from **GSE248995**: 15 people undergoing
+brain-tumour surgery, one sample each. Not every cell in a sample is a tumour
+cell. See [Baig et al., 2024](https://pmc.ncbi.nlm.nih.gov/articles/PMC10940989/)
+and the [GEO record](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE248995).
+
+The full object has 18,734 genes and 10,834 cells. To keep computation short we
+took at most 100 random cells per sample, before looking at any clusters:
+**1,344 cells from 15 samples**, original counts, all genes. Rare cell types can
+be missed, and the cap changes the overall proportions, so do not use this
+subset to estimate the complete tissue composition.
+
+| Metadata | Meaning |
+|:--|:--|
+| `sample_id` | GEO accession of the sample |
+| `sample_label` | Sample name from the original workshop |
+| `nCount_RNA` | Total counts (UMIs) per cell |
+| `nFeature_RNA` | Number of genes detected per cell |
+| `percent.mt` | Percentage of counts from mitochondrial genes |
+
+There are no treatment groups, outcomes, or time points. The question is:
+**which cell populations are present, and what evidence supports each name?**
+
+# Exercise 1 / Inspect the object
+
+```{r load-object}
+source("start_here.R")
+sc
+dim(sc)
+head(sc[[]])
+table(sc$sample_label)
+```
+
+The count matrix has genes in rows and cells in columns. `sc[[]]` returns the
+cell metadata: one row per cell, in the same order as the matrix columns.
+
+<div class="checkpoint">
+<strong>Before proceeding:</strong> how many genes, cells, and samples are
+there? Why do two samples have fewer than 100 cells? Why are 1,344 cells not
+1,344 independent observations for a statement about people?
+</div>
+
+# Exercise 2 / Quality control
+
+Not every barcode holds one intact cell:
+
+- a **damaged cell** has lost cytoplasmic RNA: few genes, and a high share of
+  mitochondrial counts;
+- an **empty droplet** holds only free-floating RNA: very few genes;
+- a **doublet** captured two cells: unusually *many* genes and counts.
+
+Free-floating (**ambient**) RNA from burst cells also lands in intact cells. No
+filter removes it; you will meet it again in Exercise 5.
+
+Two filtering rules are on the table:
+
+| Rule | Detected genes | Mitochondrial share |
+|:--|:--|:--|
+| Working rule | more than 200 and fewer than 6,000 | below 20% |
+| Strict standard rule (from the longer workshop) | more than 200 and fewer than 2,500 | below 5% |
+
+**Your task:** look at the QC distributions per sample, compare what the two
+rules would keep, then apply the working rule.
+
+Try your own prompt, or look at the Seurat tutrial from their webpage if you want a more hardcore experience. this is how it could look though:
+
+> **AI prompt:** My Seurat object is called sc (Seurat 5). Its metadata has
+> sample_label, nFeature_RNA, nCount_RNA, and percent.mt. Write R code that
+> (1) draws violin plots of the three QC columns by sample_label, without points;
+> (2) plots nCount_RNA against nFeature_RNA, coloured by sample_label;
+> (3) prints a summary of the three columns; (4) counts per sample_label how
+> many cells each of the two rules in the table keeps. Then keep only the cells
+> that pass the working rule, still in sc.
+
+<details>
+<summary>Show the code</summary>
+
+```{r qc-plots}
+VlnPlot(sc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+        group.by = "sample_label", pt.size = 0, ncol = 3, layer = "counts")
+FeatureScatter(sc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",
+               group.by = "sample_label")
+summary(sc[[]][, c("nFeature_RNA", "nCount_RNA", "percent.mt")])
+```
+
+```{r qc-rules}
+qc <- sc[[]]
+qc$keep_working <- with(qc, nFeature_RNA > 200 & nFeature_RNA < 6000 & percent.mt < 20)
+qc$keep_strict  <- with(qc, nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+colSums(qc[, c("keep_working", "keep_strict")])
+aggregate(cbind(keep_working, keep_strict) ~ sample_label, qc, sum)
+```
+
+```{r qc-apply}
+sc <- subset(sc, cells = rownames(qc)[qc$keep_working])
+ncol(sc)
+```
+
+</details>
+
+Look at the smallest values in `summary()`: these data were already filtered
+before they reached us.
+
+> **task:** Describe your scatter plot (where most cells
+> sit, where the outliers are) and ask what a doublet and a damaged cell would
+> look like in it.
+
+<div class="checkpoint">
+<strong>Before proceeding:</strong> how many cells does each rule keep, and
+which samples would lose most under the strict rule? Is a rule that removes
+more cells better? Which barcode problem can neither rule catch?
+</div>
+
+**Stuck?** `sc <- readRDS("checkpoints/brain_cells_qc.rds")` loads the filtered cells.
+
+# Exercise 3 / Normalise and run PCA
+
+> **AI prompt:** sc holds raw counts after QC (Quality Control. Write Seurat code that
+> log-normalises the counts, finds 2,000 variable genes, scales them, and runs a
+> PCA with 30 components and seed.use = 42. Keep the object name sc. Then plot
+> the PCA coloured by sample_label and an elbow plot of the 30 components.
+
+<details>
+<summary>Show the code</summary>
+
+```{r pca}
+sc <- NormalizeData(sc, verbose = FALSE)
+sc <- FindVariableFeatures(sc, nfeatures = 2000, verbose = FALSE)
+sc <- ScaleData(sc, verbose = FALSE)
+sc <- RunPCA(sc, npcs = 30, seed.use = 42, verbose = FALSE)
+DimPlot(sc, reduction = "pca", group.by = "sample_label")
+ElbowPlot(sc, ndims = 30)
+```
+
+</details>
+
+- **NormalizeData** divides each cell's counts by its total and log-transforms
+  them, so cells with more counts become comparable to cells with fewer.
+- **FindVariableFeatures** keeps the 2,000 genes that vary most between cells.
+- **ScaleData** centres and scales these genes so that no single gene
+  dominates the PCA.
+- **RunPCA** summarises them into 30 components, as in the training.
+
+The elbow plot shows the standard deviation of each PC; where the curve
+flattens, further PCs add little. We use **PCs 1–15**. That is a working
+choice, not the optimum for every Seurat run and can change between every dataset.
+
+<div class="checkpoint">
+<strong>Before proceeding:</strong> are variable genes the same as
+differentially expressed genes? Does normalisation remove sample effects?
+What could you lose with 5 PCs, and what could you add with 30?
+</div>
+
+# Exercise 4 / Clusters and UMAP
+
+Seurat connects each cell to its most similar neighbours in PCA space, then
+finds groups of densely connected cells. The **resolution** sets how finely it
+splits. UMAP draws the same neighbourhoods in two dimensions.
+
+Again, try yourself at a prompt. But this one should generally work. Make sure
+you know what resolution, PCA dims and so on mean.
+
+> **AI prompt:** sc has a PCA. Using PCs 1 to 15, build the neighbour graph,
+> find clusters at resolution 0.4 with random.seed = 42, and run UMAP with
+> seed.use = 42. Then copy sc to sc_more, recluster the copy at resolution 1.0,
+> and plot both clusterings side by side on the same UMAP, with cluster
+> numbers. Finally colour the UMAP of sc by sample_label.
+
+<details>
+<summary>Show the code</summary>
+
+```{r clustering}
+sc <- FindNeighbors(sc, dims = 1:15, verbose = FALSE)
+sc <- FindClusters(sc, resolution = 0.4, random.seed = 42, verbose = FALSE)
+sc <- RunUMAP(sc, dims = 1:15, seed.use = 42, verbose = FALSE)
+sc_more <- FindClusters(sc, resolution = 1.0, random.seed = 42, verbose = FALSE)
+(DimPlot(sc, label = TRUE) + ggtitle("Resolution 0.4")) +
+  (DimPlot(sc_more, label = TRUE) + ggtitle("Resolution 1.0"))
+DimPlot(sc, group.by = "sample_label")
+```
+
+</details>
+
+Both clusterings are drawn on the same UMAP, so only the grouping differs.
+Clusters and UMAP come from the same PCs. 
+
+<div class="checkpoint">
+<strong>Before proceeding:</strong> how many clusters does each resolution
+give? Does a finer split mean better biology? In the sample-coloured UMAP,
+which groups look like they come from a single sample?
+</div>
+
+**Stuck?** `sc <- readRDS("checkpoints/brain_cells_umap.rds")` loads the cells
+clustered at resolution 0.4. We continue with resolution 0.4.
+
+# Exercise 5 / Name the cell types
+
+Clusters are numbered, not named. A cluster gets a name when it expresses
+**several** markers of one cell type and few of the others. Start with the
+short marker panel in `data/marker_reference.csv`:
+
+> **AI prompt:** data/marker_reference.csv has the columns gene_id and
+> population. Read it, print which genes belong to which population, and make
+> a Seurat DotPlot of all its genes, in the order of the file, for the clusters
+> in sc, with rotated axis labels.
+
+<details>
+<summary>Show the code</summary>
+
+```{r dotplot}
+panel <- read.csv("data/marker_reference.csv")
+split(panel$gene_id, panel$population)  # which genes mark which population
+DotPlot(sc, features = panel$gene_id) + RotatedAxis()
+```
+
+</details>
+
+The genes are ordered by population, in the order of the file. Dot size is the
+share of cells in the cluster that express the gene; colour is the average
+expression, scaled per gene, so each gene's colours show where it is highest.
+Then check what the data themselves say: `FindAllMarkers()` compares each
+cluster with all other cells.
+
+Try yourself with a prompt or use this one (what do the variables mean?)
+
+> **AI prompt:** Run FindAllMarkers on sc for positive markers only
+> (min.pct = 0.25, logfc.threshold = 0.25). Then make a table with one row per
+> cluster: the number of cells and the five genes with the highest avg_log2FC
+> among genes with p_val_adj < 0.05, leaving out gene names that contain a dot
+> (unnamed clones such as RP11-552D4.1). Save it as output/top5_markers.csv.
+
+<details>
+<summary>Show the code</summary>
+
+```{r discover-markers}
+cluster_markers <- FindAllMarkers(sc, only.pos = TRUE, min.pct = 0.25,
+                                  logfc.threshold = 0.25, verbose = FALSE)
+# If this takes too long: cluster_markers <- read.csv("output/cluster_markers.csv")
+named <- subset(cluster_markers, p_val_adj < 0.05 & !grepl(".", gene, fixed = TRUE))
+top5 <- do.call(rbind, lapply(split(named, named$cluster), function(d) {
+  d <- head(d[order(-d$avg_log2FC), ], 5)
+  data.frame(cluster = d$cluster[1], cells = sum(Idents(sc) == d$cluster[1]),
+             top_genes = paste(d$gene, collapse = ", "))
+}))
+top5
+write.csv(top5, "output/top5_markers.csv", row.names = FALSE)
+```
+
+</details>
+
+The table lists, for each cluster, the five genes that most distinguish it from
+all other cells. A top gene can mark a cell type, a cell state, or something
+specific to one person. These tests reuse the data that made the clusters, so
+their p-values do not validate the clusters. This is also a simplified version of 
+how this normally works
+
+Use both sources: the panel shows known markers; the top-5 list shows what the
+data themselves emphasise. Look up unfamiliar genes (GeneCards, the Human
+Protein Atlas, or a search engine), or ask an assistant:
+
+> **AI task:** Copy your top-5 table as text (not as a file) into a chatbot
+> and ask which cell type or cell state each gene list suggests in human brain
+> tissue removed during surgery. Treat the answers as suggestions: check each
+> one in the dot plot or with `FeaturePlot(sc, features = c("GENE1", "GENE2"))`
+> before you use it.
+
+Now name every cluster. Two clusters can share a name. Write **"Unassigned"** or mark them as a mix of cell types.
+When the markers are mixed that is a valid result.
+
+```{r name-clusters}
+cluster_names <- c("0" = "...", "1" = "...", "2" = "...", "3" = "...", "4" = "...",
+                   "5" = "...", "6" = "...", "7" = "...", "8" = "...")
+sc$cell_type <- unname(cluster_names[as.character(Idents(sc))])
+table(sc$cell_type, useNA = "ifany")
+DimPlot(sc, group.by = "cell_type", label = TRUE, repel = TRUE)
+write.csv(data.frame(cluster = names(cluster_names), cell_type = cluster_names),
+          "output/my_cell_types.csv", row.names = FALSE)
+```
+
+<div class="checkpoint">
+<strong>Before proceeding:</strong> which clusters could you name with at
+least two markers? Which did you leave unassigned, and why? The red-blood-cell
+genes HBA1 and HBB are detected in many clusters. Are all these cells red
+blood cells?
+</div>
+
+# Exercise 6 / Where do the clusters come from?
+
+A cell type should appear in several people. A cluster made by one sample can
+be a cell type only that person has, a state of that person's cells, or a
+technical artefact of that sample.
+
+> **AI prompt:** sc has clusters (Idents(sc)) and the metadata columns
+> sample_label and cell_type. Make a table of cluster by sample_label, and print
+> for each cluster the share of its cells that come from its largest sample.
+> Then draw a ggplot2 bar chart with one bar per sample_label, filled by
+> cell_type, showing proportions, with readable x-axis labels.
+
+<details>
+<summary>Show the code</summary>
+
+```{r composition}
+composition <- table(cluster = Idents(sc), sample = sc$sample_label)
+composition
+round(apply(composition, 1, max) / rowSums(composition), 2)  # share from the largest sample
+ggplot(sc[[]], aes(x = sample_label, fill = cell_type)) +
+  geom_bar(position = "fill") +
+  labs(x = NULL, y = "Share of cells", fill = "Cell type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+</details>
+
+<div class="checkpoint">
+<strong>Before proceeding:</strong> which clusters come almost entirely from
+one sample? For each of them, look back at its markers: is it a cell type, a
+state, or an artefact, and what would you need to decide? Is a
+sample-specific cluster automatically a batch effect that integration should
+remove?
+</div>
+
+Integration methods (CCA, Harmony) align shared cell types across samples. They
+can also erase a population or a state that really exists in only one person.
+Inspect sample composition first, as you did here, and integrate only with a
+reason.
+
+# Exercise 7 / Conclude
+
+Save your workbook, your cell-type table, and one figure, for example:
+
+```{r save-figure}
+ggsave("output/my_cell_types.png",
+       DimPlot(sc, group.by = "cell_type", label = TRUE, repel = TRUE),
+       width = 8, height = 5)
+```
+
+<div class="checkpoint">
+<strong>Send Ava:</strong> four short statements.
+(1) Your QC decision and what it changed.
+(2) What changed when the resolution increased.
+(3) One cell-type name and the markers that support it.
+(4) One cluster you could not name, and the evidence you would need.
+</div>
+
+::: {.key-ideas}
+**Key ideas · Single cells**
+
+- One sample is one person. Many cells from one person describe that person in
+  detail; they do not replace more people.
+- QC removes barcodes that are not intact single cells; doublets and ambient
+  RNA partly survive it.
+- Normalisation → variable genes → scaling → PCA → neighbours → clusters →
+  UMAP. Each step contains choices (PCs, resolution) that change the clusters.
+- A cell-type name needs several markers. Unassigned is an honest answer.
+- Check which samples a cluster comes from before naming it, and before
+  integrating samples.
+:::
+
+<div class="transmission">
+<div class="channel">AVA // ANALYSIS CHECK</div>
+<p>The procedure is the same for the Cronus biopsies. Keep this workbook.</p>
+</div>
+
+## If time remains
+
+- Pick a cluster you left unassigned and test two more genes with
+  `FeaturePlot()`, using the original paper for ideas.
+- `VlnPlot(sc, features = "AIF1", group.by = "sample_label")`: does a myeloid
+  marker look the same in every person?
+- Rerun Exercise 4 with `dims = 1:5` and compare the clusters.
+
+CCA/Harmony integration, pseudotime, and comparisons between groups of people
+is a bit too much for such a short workshop, but something we can talk about shortly next Thursday.
+
+## Resources
+
+- [Original SVZ study](https://pmc.ncbi.nlm.nih.gov/articles/PMC10940989/)
+- [GEO data record](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE248995)
+- [Seurat guided clustering tutorial](https://satijalab.org/seurat/articles/pbmc3k_tutorial)
+- [Human brain cell-type markers](https://www.nature.com/articles/s41467-024-48926-6)
