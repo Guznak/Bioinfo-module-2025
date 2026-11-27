@@ -951,6 +951,17 @@ Save the figure with `ggsave()`. Which grouping seems to track the largest
 separation? What else would you need to know before calling it a technical effect?
 
 
+<details>
+<summary>Compare your plot</summary>
+
+![Density of transformed expression for one gene, grouped by Normal and Tumor labels.](assets/examples/ex06_density.png)
+
+![PCA of the training samples, coloured by class and shaped by study.](assets/examples/ex06_pca.png)
+
+*From the worked solution. Yours should look similar; colours and point positions can differ slightly.*
+
+</details>
+
 ::: {.exercise-box}
 
 **Done when:** your PCA plot shows two colours (class) and two shapes (study),
@@ -978,6 +989,15 @@ The PCA object contains standard deviations in `sdev`. Square them to obtain
 variances, then divide by the sum across **all** components.
 Make a scree plot of the first 20 components.
 
+
+<details>
+<summary>Compare your plot</summary>
+
+![Percentage of total variance explained by each of the first twenty principal components.](assets/examples/ex07_scree.png)
+
+*From the worked solution. Yours should look similar; colours and point positions can differ slightly.*
+
+</details>
 
 ::: {.exercise-box}
 
@@ -1135,6 +1155,15 @@ ggplot(volcano_data, aes(logFC, -log10(pmax(adj.P.Val, 1e-300)),
        y = "−log10 adjusted p-value", title = "Exploratory comparison")
 ```
 
+<details>
+<summary>Compare your plot</summary>
+
+![Volcano plot of transformed expression differences and adjusted p-values before study adjustment.](assets/examples/ex08_volcano.png)
+
+*From the worked solution. Yours should look similar; colours and point positions can differ slightly.*
+
+</details>
+
 ::: {.teaching-box}
 
 <strong>P-Values: </strong>
@@ -1282,6 +1311,15 @@ ggsave(file.path(out.dir, "volcano_comparisons.png"), volcano_panels,
        width = 10, height = 4.5)
 ```
 
+<details>
+<summary>Compare your plot</summary>
+
+![Two volcano panels with matching axes: pooled without and with a study term.](assets/examples/ex09b_volcano_comparison.png)
+
+*From the worked solution. Yours should look similar; colours and point positions can differ slightly.*
+
+</details>
+
 Describe what changed on each axis between the two panels. Both panels use the
 same samples, so the difference comes from the modelling choice alone. Does the
 study term only remove findings, or does it also add some?
@@ -1330,6 +1368,15 @@ gene_plot
 ggsave(file.path(out.dir, paste0("gene_", gene, ".png")), gene_plot,
        width = 6, height = 4)
 ```
+
+<details>
+<summary>Compare your plot</summary>
+
+![Transformed expression of CCND1 in every sample, by class and coloured by study.](assets/examples/ex09c_gene_CCND1.png)
+
+*From the worked solution, for CCND1. Your plot shows the gene you picked.*
+
+</details>
 
 > **AI task:** Ask your assistant what the gene you picked is known for, in two
 > or three sentences, and whether it has been linked to head-and-neck cancer.
@@ -1436,6 +1483,15 @@ ggsave(file.path(out.dir, "pca_batch_comparison.png"), batch_plot,
 stopifnot(identical(dim(expr), dim(expr_corrected)),
           identical(dimnames(expr), dimnames(expr_corrected)))
 ```
+
+<details>
+<summary>Compare your plot</summary>
+
+![PCA panels before and after study adjustment, computed from the same genes.](assets/examples/pca_before_after.png)
+
+*From the worked solution. Yours should look similar; colours and point positions can differ slightly.*
+
+</details>
 
 ::: {.exercise-box}
 
@@ -1589,6 +1645,15 @@ ggplot(test_people, aes(factor(infection_free), probability)) +
   labs(x = "Observed outcome (0 = infected, 1 = free of infection)",
        y = "Predicted probability", title = "Held-out people: predictions can be wrong")
 ```
+
+<details>
+<summary>Compare your plot</summary>
+
+![Predicted probabilities for held-out people grouped by their observed infection outcome, with a 0.5 decision threshold.](assets/examples/ex11_predictions.png)
+
+*From the worked solution. Yours should look similar; colours and point positions can differ slightly.*
+
+</details>
 
 Each test person changes accuracy by one percentage point; sensitivity rests on
 only about 30 infection-free people, so it moves by about three points per
