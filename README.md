@@ -10,6 +10,7 @@ Backup of the student material, winter 2026. The main download is on Seafile.
    - Day 1: **AVA_training.zip**, **single_cell_workshop.zip**
    - Day 2: **cronus_mission.zip**
    - Both days: **Rlib.zip** (the R package library)
+   - Video: **R-Library_laden.mp4** shows how to set up Rlib and load the packages
 3. Extract all of them into one folder **alien-lecture** in your Documents folder:
 
    ```text
